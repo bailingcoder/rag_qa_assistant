@@ -1,0 +1,72 @@
+llm:
+  model: deepseek-chat
+  base_url: https://api.deepseek.com
+  api_key_env: DEEPSEEK_API_KEY
+
+embedding:
+  model: BAAI/bge-m3
+  base_url: https://api.siliconflow.cn/v1
+  api_key_env: SILICONFLOW_API_KEY
+
+vector_store:
+  index_dir: faiss_index
+
+splitter:
+  chunk_size: 500
+  chunk_overlap: 50
+
+retriever:
+  top_k: 3
+  score_threshold: 8.0
+  max_retry: 2
+
+logging:
+  version: 1
+  disable_existing_loggers: false
+
+  formatters:
+    simple:
+      format: "%(asctime)s | %(levelname)s | %(message)s"
+    detail:
+      format: "%(asctime)s | %(levelname)s | %(name)s | %(funcName)s:%(lineno)d | %(message)s"
+
+  handlers:
+    console:
+      class: logging.StreamHandler
+      level: INFO
+      formatter: simple
+      stream: ext://sys.stdout
+
+    file:
+      class: logging.handlers.RotatingFileHandler
+      level: DEBUG
+      formatter: detail
+      filename: logs/file.log
+      maxBytes: 5242880
+      backupCount: 5
+      encoding: utf-8
+
+    error_file:
+      class: logging.handlers.RotatingFileHandler
+      level: ERROR
+      formatter: detail
+      filename: logs/err_file.log
+      maxBytes: 5242880
+      backupCount: 5
+      encoding: utf-8
+
+  loggers:
+    rag_assistant:
+      level: DEBUG
+      handlers: [file, error_file]
+      propagate: true
+
+    httpx:
+      level: WARNING
+
+    faiss:
+      level: WARNING
+
+  root:
+    level: INFO
+    handlers: [console]

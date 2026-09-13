@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 密钥（绝对不能提交！）
+.env
+
+# 日志
+*.log
+app.log
+
+# 向量库（体积大，可随时重建，不用提交）
+faiss_index/
+
+# IDE
+.idea/
+.vscode/
+
+# 测试缓存
+.pytest_cache/
+
+# 调试临时脚本
+t.py
+Test.py
