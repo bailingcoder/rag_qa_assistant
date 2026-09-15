@@ -6,6 +6,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.rag_chain import ask
 from app.logger import setup_logger
+import time
+
+def typewriter(text: str):
+    """把完整答案逐块 yield，模拟流式打字机效果"""
+    for i in range(0, len(text), 3):      # 每次 3 个字
+        yield text[i:i + 3]
+        time.sleep(0.02)                   # 控制打字速度，可调
 
 logger=setup_logger()
 
@@ -38,5 +45,5 @@ if question:
     with st.chat_message("assistant"):
         with st.spinner("思考中..."):
             answer=ask(question,thread_id="thread_001")
-        st.write(answer)
+        st.write_stream(typewriter(answer))
     st.session_state.messages.append({"role":"assistant","content":answer})

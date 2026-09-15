@@ -249,7 +249,7 @@ def ask(question: str, thread_id: str = "default") -> str:
         result = _graph.invoke({"messages": [HumanMessage(content=question)], "retry_count": 0},
             config={"configurable": {"thread_id": thread_id}},
         )
-        return result
+        return result["answer"]
 
     except AuthenticationError:
         logger.error("API Key 无效或已过期")
