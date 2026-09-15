@@ -11,6 +11,7 @@ def get_embeddings():
         _embeddings=OpenAIEmbeddings(
             model=emb_config["model"],
             base_url=emb_config["base_url"],
-            api_key=get_api_key(emb_config["api_key_env"])
+            api_key=get_api_key(emb_config["api_key_env"]),
+            check_embedding_ctx_length=False,
         )
     return _embeddings

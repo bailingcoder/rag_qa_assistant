@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 from langchain_community.vectorstores import FAISS
 from app.embeddings import get_embeddings
