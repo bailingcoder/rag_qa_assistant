@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 INDEX_DIR = BASE_DIR / "faiss_index"
+SESSION_DIR = BASE_DIR / "sessions"
 
 
 def load_config():
