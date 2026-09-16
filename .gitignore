@@ -21,6 +21,9 @@ faiss_index/
 # 测试缓存
 .pytest_cache/
 
+# 会话列表记录
+sessions/
+
 # 调试临时脚本
 t.py
 Test.py
