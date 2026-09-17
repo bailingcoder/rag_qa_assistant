@@ -7,6 +7,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 INDEX_DIR = BASE_DIR / "faiss_index"
 SESSION_DIR = BASE_DIR / "sessions"
+MAX_PARENTS = 2            # 旋钮①：最多取几个父段落
+MAX_CONTEXT_CHARS = 4000   # 旋钮②：上下文总字符预算（按需调）
 
 
 def load_config():

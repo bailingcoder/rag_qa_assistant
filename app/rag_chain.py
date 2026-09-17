@@ -11,10 +11,11 @@ from openai import APITimeoutError, APIConnectionError, RateLimitError, Authenti
 
 
 from app.logger import setup_logger
-from app.config import get_api_key,load_config,INDEX_DIR
+from app.config import get_api_key,load_config,INDEX_DIR,MAX_CONTEXT_CHARS,MAX_PARENTS
 from app.embeddings import get_embeddings
 from app.vector_store import ensure_vector_store
 from app.prompts import SCORE_PROMPT, ROUTE_PROMPT, SYSTEM_PROMPT_WITH_CONTEXT, SYSTEM_PROMPT_NO_CONTEXT, RETRY_HINT
+
 
 logger = setup_logger()
 
@@ -114,12 +115,25 @@ def retrieve_node(state: RAGState) -> dict:
     )
     docs = vector_store.similarity_search(question, k=config["retriever"]["top_k"])
 
-    if not docs:
-        logger.warning("未检索到相关资料，问题: %s", question)
-        return {"context": ""}
+    parents:dict[str,str] = {}
+    total = 0
+    for doc in docs:
+        pid = doc.metadata.get("parent_id", "")
+        parent = doc.metadata.get("parent_text", "")
+        if not parent or pid in parents:
+            continue
+        if len(parents) >= MAX_PARENTS:
+            break
+        if total + len(parent) > MAX_CONTEXT_CHARS:
+            continue
+        parents[pid] = parent
+        total += len(parent)
 
-    context = "\n\n".join([d.page_content for d in docs])
-    logger.info("检索到 %d 个相关片段", len(docs))
+    context = "\n\n".join(parents.values()) if parents else "\n\n".join(d.page_content for d in docs)
+    logger.info(
+        "检索 %d 块，去重后 %d 个父块，最终 %d 块 / %d token",
+        len(docs), len(parents), len(parents), total,
+    )
     return {"context": context}
 
 

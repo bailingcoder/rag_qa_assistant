@@ -3,7 +3,7 @@ from langchain_community.vectorstores import FAISS
 from app.embeddings import get_embeddings
 from app.logger import setup_logger
 from app.loader import load_documents, list_data_files
-from app.splitter import split_documents
+from app.splitter import split_documents_with_parent
 from app.config import load_config, INDEX_DIR, DATA_DIR
 
 logger = setup_logger()
@@ -34,17 +34,20 @@ def _new_files() -> list[Path]:
     return [f for f in current if f.name not in indexed]
 
 
+
+
 def _add_files(vector_store, files: list[Path]):
     """把新文件向量化后追加进向量库，并更新清单"""
-    embeddings = get_embeddings()
     config = load_config()
     sc = config["splitter"]
 
-    documents = load_documents(str(DATA_DIR), files=files)
-    chunks = split_documents(documents, sc["chunk_size"], sc["chunk_overlap"])
+    documents = load_documents(str(DATA_DIR),files)
+    chunks = split_documents_with_parent(documents, sc["chunk_size"], sc["chunk_overlap"])
 
-    vector_store.add_documents(chunks)          # 关键：追加，不重建
-    vector_store.save_local(str(INDEX_DIR))
+    if chunks:
+        vector_store.add_documents(chunks)  # 关键：追加，不重建
+        vector_store.save_local(str(INDEX_DIR))
+
 
     # 更新清单
     indexed = _read_manifest()
@@ -82,8 +85,8 @@ def ensure_vector_store(index_dir=str(INDEX_DIR), embeddings=None):
     config = load_config()
     sc = config["splitter"]
     all_files = list_data_files(str(DATA_DIR))
-    documents = load_documents(str(DATA_DIR))
-    chunks = split_documents(documents, sc["chunk_size"], sc["chunk_overlap"])
+    documents = load_documents(str(DATA_DIR), all_files)
+    chunks = split_documents_with_parent(documents, sc["chunk_size"], sc["chunk_overlap"])
 
     _vector_store = FAISS.from_documents(chunks, embeddings)
     _vector_store.save_local(index_dir)

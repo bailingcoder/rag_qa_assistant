@@ -14,11 +14,8 @@ def list_data_files(data_dir: str = str(DATA_DIR)) -> list[Path]:
 
 def load_documents(data_dir: str = str(DATA_DIR), files: list[Path] | None = None):
     """加载文档。files 为 None 时加载全部；否则只加载指定文件。"""
-    data_path = Path(data_dir)
     documents = []
-
     targets = files if files is not None else list_data_files(data_dir)
-
     for f in targets:
         f = Path(f)
         if f.suffix.lower() == ".pdf":
