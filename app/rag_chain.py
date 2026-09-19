@@ -8,6 +8,9 @@ from langgraph.graph.message import add_messages
 import json
 import re
 from openai import APITimeoutError, APIConnectionError, RateLimitError, AuthenticationError
+import uuid                              # P1-8：生成 trace_id
+import time                              # P1-8：计时
+from contextvars import ContextVar       # P1-8：trace_id 跨节点传递
 
 
 from app.logger import setup_logger
@@ -34,13 +37,13 @@ class RAGState(BaseModel):
     )
     score: float = Field(default=0.0, description="答案质量评分，评分范围0-10分")
     reason: str =Field(default="", description="评分理由")
-    is_pass: bool = Field(default=False, description="评分是否合格，6分以上包括6分为True")
     retry_count: int = Field(default=0, description="已重试次数")
     need_retrieve: bool = Field(default=True, description="是否需要检索知识库")
 
 
 _llm: ChatOpenAI | None = None
 _graph: Any = None
+_trace_id: ContextVar[str] = ContextVar("trace_id", default="-")
 
 def get_llm() -> ChatOpenAI:
     """获取 LLM 实例（模块级缓存，避免重复创建连接）"""
@@ -96,6 +99,14 @@ def _llm_json(message: str) -> dict:
             message + "\n\n注意：上次你没输出合法 JSON。这次请只输出一个 JSON 对象，不要任何其他文字。"
         ).content.strip()
         return json.loads(_extract_json(content))
+
+def _usage_tokens(msg) -> tuple[int, int]:
+    """从 AIMessage 提取 (输入token, 输出token)，取不到返回 (0, 0)"""
+    um = getattr(msg, "usage_metadata", None)              # langchain 新版
+    if um:
+        return um.get("input_tokens", 0), um.get("output_tokens", 0)
+    tu = (getattr(msg, "response_metadata", {}) or {}).get("token_usage", {})   # 旧版兜底
+    return tu.get("prompt_tokens", 0), tu.get("completion_tokens", 0)
 
 
 def get_last_question(messages: list) -> str:
@@ -155,7 +166,8 @@ def generate_node(state: RAGState) -> dict:
         messages = messages + [HumanMessage(content=hint)]
 
     result = get_llm().invoke(messages)
-    logger.info("生成答案（第 %d 次）", state.retry_count + 1)
+    in_tok, out_tok = _usage_tokens(result)
+    logger.info("生成答案（第 %d 次），token: 输入 %d / 输出 %d", state.retry_count + 1, in_tok, out_tok)
     return {"answer": result.content, "messages": [result]}
 
 def after_generate(state: RAGState) -> str:
@@ -174,13 +186,11 @@ def judge_answer_node(state: RAGState) -> dict:
     data = _llm_json(SCORE_PROMPT.format(history=history,question=question, context=context, answer=answer))
     score = float(data["score"])
     reason = str(data["reason"])
-    is_pass = bool(data["is_pass"])
 
-    logger.info("第 %d 次评分: %.1f 分，是否通过: %s，原因: %s", state.retry_count + 1, score, is_pass, reason)
+    logger.info("第 %d 次评分: %.1f 分，原因: %s", state.retry_count + 1, score,  reason)
     return {
         "score": score,
         "reason": reason,
-        "is_pass": is_pass,
         "retry_count": state.retry_count + 1,
     }
 
@@ -253,35 +263,43 @@ def build_graph():
     return graph.compile(checkpointer=MemorySaver())
 
 
-def ask(question: str, thread_id: str = "default") -> str:
-    """问答入口。统一处理异常，日志记录完整错误，用户看到友好提示。"""
+def ask(question: str, thread_id: str = "default") -> dict:
+    """问答入口。统一处理异常，返回 {"ok": bool, "answer"/"error": str}。"""
     global _graph
     if _graph is None:
         _graph = build_graph()
+
+    trace = uuid.uuid4().hex[:8]              # P1-8
+    token = _trace_id.set(trace)              # P1-8
+    start = time.perf_counter()               # P1-8
+    logger.info("[%s] 开始问答，thread=%s，问题: %s", trace, thread_id, question)
 
     try:
         result = _graph.invoke({"messages": [HumanMessage(content=question)], "retry_count": 0},
             config={"configurable": {"thread_id": thread_id}},
         )
-        return result["answer"]
+        logger.info("[%s] 问答完成，耗时 %.2f 秒", trace, time.perf_counter() - start)
+        return {"ok": True, "answer": result["answer"]}          # P1-7
 
     except AuthenticationError:
-        logger.error("API Key 无效或已过期")
-        return "AI 服务认证失败，请检查 .env 中的 API Key 是否正确。"
+        logger.error("[%s] API Key 无效或已过期", trace)
+        return {"ok": False, "error": "AI 服务认证失败，请检查 .env 中的 API Key 是否正确。"}
     except RateLimitError:
-        logger.error("API 请求被限流")
-        return "请求过于频繁，请稍后再试。"
+        logger.error("[%s] API 请求被限流", trace)
+        return {"ok": False, "error": "请求过于频繁，请稍后再试。"}
     except (APITimeoutError, APIConnectionError):
-        logger.error("AI 服务连接超时或失败")
-        return "AI 服务暂时连接不上，请稍后重试。"
+        logger.error("[%s] AI 服务连接超时或失败", trace)
+        return {"ok": False, "error": "AI 服务暂时连接不上，请稍后重试。"}
     except FileNotFoundError as exc:
-        logger.error("向量库不存在: %s", exc)
-        return "系统尚未构建知识库，请先运行向量库构建脚本。"
+        logger.error("[%s] 向量库不存在: %s", trace, exc)
+        return {"ok": False, "error": "系统尚未构建知识库，请先运行向量库构建脚本。"}
     except RAGError as exc:
-        logger.error("RAG 处理错误: %s", exc)
-        return "系统处理出错，请稍后再试。"
+        logger.error("[%s] RAG 处理错误: %s", trace, exc)
+        return {"ok": False, "error": "系统处理出错，请稍后再试。"}
     except Exception as exc:
-        logger.exception("问答过程发生未预期错误")
-        return "系统暂时无法回答，请稍后再试。"
+        logger.exception("[%s] 问答过程发生未预期错误", trace)
+        return {"ok": False, "error": "系统暂时无法回答，请稍后再试。"}
+    finally:
+        _trace_id.reset(token)
 
 

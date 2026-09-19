@@ -100,10 +100,6 @@ with st.sidebar:
     st.header("智能知识库问答助手")
 
     if st.button("新建会话",width="stretch",icon="✒️"):
-        #保存会话信息
-        save_session()
-        logger.info(f"保存会话：{st.session_state.session_name}")
-
         #创建一个新会话
         if st.session_state.messages:
             st.session_state.session_name = generate_session_name()
@@ -130,8 +126,6 @@ with st.sidebar:
                 delete_session(session)
                 st.rerun()
 
-
-
 question=st.chat_input("请输入您的问题")
 if question:
     st.session_state.messages.append({"role":"user","content":question})
@@ -139,6 +133,11 @@ if question:
 
     with st.chat_message("assistant"):
         with st.spinner("思考中..."):
-            answer=ask(question,thread_id="thread_001")
-        st.write_stream(typewriter(answer))
-    st.session_state.messages.append({"role":"assistant","content":answer})
+            result=ask(question,thread_id=st.session_state.session_name)
+        if result["ok"]:                                  # P1-7
+            answer=result["answer"]
+            st.write_stream(typewriter(answer))
+            st.session_state.messages.append({"role":"assistant","content":answer})
+            save_session()
+        else:
+            st.error(result["error"])                     # 错误单独展示，不存历史

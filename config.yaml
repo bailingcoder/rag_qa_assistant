@@ -8,8 +8,6 @@ embedding:
   base_url: https://api.siliconflow.cn/v1
   api_key_env: SILICONFLOW_API_KEY
 
-vector_store:
-  index_dir: faiss_index
 
 splitter:
   chunk_size: 500
