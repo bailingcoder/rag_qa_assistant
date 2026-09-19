@@ -16,7 +16,7 @@ def test_retrieve_按父去重且最多两块(monkeypatch):
     fake_vs.similarity_search.return_value = fake_docs
     monkeypatch.setattr(rag_chain, "ensure_vector_store", lambda **kw: fake_vs)
 
-    result = retrieve_node(RAGState(messages=[HumanMessage(content="问题")]))
+    result = retrieve_node(RAGState(question="问题"))
 
     assert "父块A" in result["context"]          # 同父的两个块只保留一次
     assert "父块B" in result["context"]

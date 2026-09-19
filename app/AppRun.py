@@ -8,6 +8,7 @@ from datetime import datetime
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.rag_chain import ask
+from langchain_core.messages import HumanMessage, AIMessage   # 新增
 from app.logger import setup_logger
 from app.config import SESSION_DIR
 
@@ -25,11 +26,15 @@ st.set_page_config(
 st.title("📚 智能知识库问答助手")
 
 
-def typewriter(text: str):
-    """把完整答案逐块 yield，模拟流式打字机效果"""
-    for i in range(0, len(text), 3):      # 每次 3 个字
-        yield text[i:i + 3]
-        time.sleep(0.02)                   # 控制打字速度，可调
+def to_messages(history_dict: list[dict]):
+    """把 st.session_state.messages 的 dict 列表转成 LangChain 消息列表"""
+    msgs = []
+    for m in history_dict:
+        if m["role"] == "user":
+            msgs.append(HumanMessage(content=m["content"]))
+        else:
+            msgs.append(AIMessage(content=m["content"]))
+    return msgs
 
 
 def generate_session_name():
@@ -126,18 +131,19 @@ with st.sidebar:
                 delete_session(session)
                 st.rerun()
 
+
 question=st.chat_input("请输入您的问题")
 if question:
+    history = to_messages(st.session_state.messages)      # 当前问题之前的完整历史
     st.session_state.messages.append({"role":"user","content":question})
     st.chat_message("user").write(question)
 
     with st.chat_message("assistant"):
         with st.spinner("思考中..."):
-            result=ask(question,thread_id=st.session_state.session_name)
-        if result["ok"]:                                  # P1-7
-            answer=result["answer"]
-            st.write_stream(typewriter(answer))
+            result=ask(question, history)
+        if result["ok"]:
+            answer=st.write_stream(result["stream"])      # 真流式，返回完整答案
             st.session_state.messages.append({"role":"assistant","content":answer})
             save_session()
         else:
-            st.error(result["error"])                     # 错误单独展示，不存历史
+            st.error(result["error"])
