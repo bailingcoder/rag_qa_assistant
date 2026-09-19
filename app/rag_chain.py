@@ -11,11 +11,11 @@ import time
 from contextvars import ContextVar
 
 from app.logger import setup_logger
-from app.config import get_api_key, load_config, INDEX_DIR, MAX_CONTEXT_CHARS, MAX_PARENTS
+from app.config import get_api_key, load_config, INDEX_DIR, MAX_CONTEXT_CHARS, MAX_PARENTS,MAX_TURNS
 from app.embeddings import get_embeddings
 from app.vector_store import ensure_vector_store
-from app.prompts import ROUTE_PROMPT, SYSTEM_PROMPT_WITH_CONTEXT, SYSTEM_PROMPT_NO_CONTEXT
-
+from app.prompts import (ROUTE_PROMPT, SYSTEM_PROMPT_WITH_CONTEXT, SYSTEM_PROMPT_NO_CONTEXT,
+                         REWRITE_PROMPT,CLARIFY_PROMPT)
 
 logger = setup_logger()
 
@@ -30,6 +30,8 @@ class RAGState(BaseModel):
     question: str = Field(default="", description="当前用户问题")
     context: str = Field(default="", description="检索到的资料片段（拼接后）")
     need_retrieve: bool = Field(default=True, description="是否需要检索知识库")
+    history: list[BaseMessage] = Field(default_factory=list, description="最近几轮历史，供查询重写使用")
+    clarify_question: str = Field(default="", description="需要反问用户的问题")
 
 
 _llm: ChatOpenAI | None = None
@@ -95,6 +97,77 @@ def _llm_json(message: str) -> dict:
         return json.loads(_extract_json(content))
 
 
+def _format_history(history: list[BaseMessage], max_turns: int = MAX_TURNS) -> str:
+    """把最近几轮消息转成可读文本，供重写 prompt 使用"""
+    lines = []
+    for m in history[-max_turns:]:
+        role = "用户" if m.type == "human" else "助手"
+        lines.append(f"{role}：{m.content}")
+    return "\n".join(lines)
+
+
+def route_node(state: RAGState) -> dict:
+    """路由节点：让 LLM 判断是否需要检索"""
+    question = state.question
+
+    if _is_greeting(question) or len(re.sub(r"[^\u4e00-\u9fa5a-zA-Z]", "", question)) <= 2:
+        logger.info("路由决策: %s\n原因: %s", "直接回答", "命中寒暄/短文本规则，跳过知识库检索")
+        return {"need_retrieve": False}
+
+    try:
+        data = _llm_json(ROUTE_PROMPT.format(question=question))
+        need_retrieve = bool(data["need_retrieve"])
+        reason = str(data["reason"])
+    except (json.JSONDecodeError, KeyError, TypeError):
+        logger.warning("路由解析失败，默认检索")
+        reason = "路由解析失败，默认检索"
+        need_retrieve = True
+
+    logger.info("路由决策: %s\n原因: %s", "检索" if need_retrieve else "直接回答", reason)
+    return {"need_retrieve": need_retrieve}
+
+def rewrite_node(state: RAGState) -> dict:
+    """查询重写节点：把依赖上文的问题改写成独立完整的问题，便于检索"""
+    question = state.question
+    history = state.history
+    if not history:
+        return {"question": question}
+    try:
+        history = _format_history(history)
+        rewritten = get_llm().invoke(
+            REWRITE_PROMPT.format(question=question, history=history)
+        ).content.strip()
+        logger.info("查询重写: %s\n重写后: %s", question, rewritten)
+        return {"question": rewritten}
+    except Exception as exc:
+        logger.warning("查询重写失败，默认使用原问题")
+        logger.debug(exc)
+        return {"question": question}
+
+
+def clarify_node(state: RAGState) -> dict:
+    """澄清节点：判断重写后的问题信息是否足够，不足则生成反问"""
+    question = state.question
+    history = state.history
+    try:
+        data = _llm_json(CLARIFY_PROMPT.format(question=question, history=history))
+        clarify_question = str(data.get("clarify_question", ""))
+    except (json.JSONDecodeError, KeyError, TypeError):
+        logger.warning("澄清判断失败，默认不反问")
+        clarify_question = ""
+
+    if clarify_question:
+        logger.info("需要反问澄清: %s", clarify_question)
+    return {"clarify_question": clarify_question}
+
+
+def clarify_condition(state: RAGState) -> str:
+    return "retrieve" if not state.clarify_question else "end"
+
+def route_condition(state: RAGState) -> str:
+    return "rewrite" if state.need_retrieve else "reset_context"
+
+
 def retrieve_node(state: RAGState) -> dict:
     """检索节点：从向量库找与问题最相关的资料"""
     config = load_config()
@@ -129,30 +202,6 @@ def reset_context_node(state: RAGState) -> dict:
     return {"context": ""}
 
 
-def route_node(state: RAGState) -> dict:
-    """路由节点：让 LLM 判断是否需要检索"""
-    question = state.question
-
-    if _is_greeting(question) or len(re.sub(r"[^\u4e00-\u9fa5a-zA-Z]", "", question)) <= 2:
-        logger.info("路由决策: %s\n原因: %s", "直接回答", "命中寒暄/短文本规则，跳过知识库检索")
-        return {"need_retrieve": False}
-
-    try:
-        data = _llm_json(ROUTE_PROMPT.format(question=question))
-        need_retrieve = bool(data["need_retrieve"])
-        reason = str(data["reason"])
-    except (json.JSONDecodeError, KeyError, TypeError):
-        logger.warning("路由解析失败，默认检索")
-        reason = "路由解析失败，默认检索"
-        need_retrieve = True
-
-    logger.info("路由决策: %s\n原因: %s", "检索" if need_retrieve else "直接回答", reason)
-    return {"need_retrieve": need_retrieve}
-
-
-def route_condition(state: RAGState) -> str:
-    return "retrieve" if state.need_retrieve else "chat"
-
 
 def _stream_answer(context: str, history: list[BaseMessage], question: str):
     """流式生成答案。history 是完整历史（不含当前问题）。"""
@@ -170,15 +219,23 @@ def _stream_answer(context: str, history: list[BaseMessage], question: str):
 def build_graph():
     graph = StateGraph(RAGState)
 
+    graph.add_node("rewrite", rewrite_node)
     graph.add_node("retrieve", retrieve_node)
     graph.add_node("reset_context", reset_context_node)
     graph.add_node("route", route_node)
+    graph.add_node("clarify", clarify_node)
 
     graph.add_edge(START, "route")
     graph.add_conditional_edges(
         "route",
         route_condition,
-        {"retrieve": "retrieve", "chat": "reset_context"},
+        {"rewrite": "rewrite", "reset_context": "reset_context"},
+    )
+    graph.add_edge("rewrite", "clarify")
+    graph.add_conditional_edges(
+        "clarify",
+        clarify_condition,
+        {"retrieve": "retrieve", "end": END},
     )
     graph.add_edge("retrieve", END)
     graph.add_edge("reset_context", END)
@@ -199,8 +256,13 @@ def ask(question: str, history: list[BaseMessage]) -> dict:
     logger.info("[%s] 开始问答，问题: %s", trace, question)
 
     try:
-        result = _graph.invoke({"question": question})
-        context = result["context"]
+        result = _graph.invoke({"question": question, "history": history})
+        clarify_question = result.get("clarify_question", "")
+        if clarify_question:
+            logger.info("[%s] 反问澄清: %s", trace, clarify_question)
+            return {"ok": True, "clarify": clarify_question}
+
+        context = result.get("context", "")
         logger.info("[%s] 检索完成，耗时 %.2f 秒", trace, time.perf_counter() - start)
         return {"ok": True, "stream": _stream_answer(context, history, question)}
 

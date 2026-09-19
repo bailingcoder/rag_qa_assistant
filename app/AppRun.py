@@ -142,8 +142,12 @@ if question:
         with st.spinner("思考中..."):
             result=ask(question, history)
         if result["ok"]:
-            answer=st.write_stream(result["stream"])      # 真流式，返回完整答案
-            st.session_state.messages.append({"role":"assistant","content":answer})
+            if "clarify" in result:
+                st.write(result["clarify"])
+                st.session_state.messages.append({"role":"assistant","content":result["clarify"]})
+            else:
+                answer=st.write_stream(result["stream"])      # 真流式，返回完整答案
+                st.session_state.messages.append({"role":"assistant","content":answer})
             save_session()
         else:
             st.error(result["error"])
