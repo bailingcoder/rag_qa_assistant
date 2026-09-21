@@ -10,7 +10,7 @@ SESSION_DIR = BASE_DIR / "sessions"
 MAX_PARENTS = 2            # 旋钮①：最多取几个父段落
 MAX_CONTEXT_CHARS = 4000   # 旋钮②：上下文总字符预算（按需调）
 MAX_TURNS = 5              # 旋钮③：最多多少轮对话
-
+RRF_K = 60
 
 def load_config():
     load_dotenv(BASE_DIR / ".env")

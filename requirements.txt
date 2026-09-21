@@ -8,3 +8,5 @@ pypdf
 streamlit
 pyyaml
 python-dotenv
+rank-bm25
+jieba

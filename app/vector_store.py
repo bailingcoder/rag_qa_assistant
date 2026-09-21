@@ -4,6 +4,7 @@ from app.embeddings import get_embeddings
 from app.logger import setup_logger
 from app.loader import load_documents, list_data_files
 from app.splitter import split_documents_with_parent
+from app.bm25_store import save_chunks, append_chunks
 from app.config import load_config, INDEX_DIR, DATA_DIR
 
 logger = setup_logger()
@@ -47,6 +48,7 @@ def _add_files(vector_store, files: list[Path]):
     if chunks:
         vector_store.add_documents(chunks)  # 关键：追加，不重建
         vector_store.save_local(str(INDEX_DIR))
+        append_chunks(chunks)  # 新增：同步 chunks 供 BM25
 
 
     # 更新清单
@@ -91,5 +93,6 @@ def ensure_vector_store(index_dir=str(INDEX_DIR), embeddings=None):
     _vector_store = FAISS.from_documents(chunks, embeddings)
     _vector_store.save_local(index_dir)
     _write_manifest({f.name for f in all_files})
+    save_chunks(chunks)
     logger.info("向量库已构建并保存: %s", index_dir)
     return _vector_store

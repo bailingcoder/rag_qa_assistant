@@ -15,8 +15,6 @@ splitter:
 
 retriever:
   top_k: 3
-  score_threshold: 8.0
-  max_retry: 2
 
 logging:
   version: 1

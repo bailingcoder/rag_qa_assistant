@@ -11,11 +11,13 @@ import time
 from contextvars import ContextVar
 
 from app.logger import setup_logger
-from app.config import get_api_key, load_config, INDEX_DIR, MAX_CONTEXT_CHARS, MAX_PARENTS,MAX_TURNS
+from app.config import get_api_key, load_config, INDEX_DIR, MAX_CONTEXT_CHARS, MAX_PARENTS,MAX_TURNS, RRF_K
 from app.embeddings import get_embeddings
 from app.vector_store import ensure_vector_store
 from app.prompts import (ROUTE_PROMPT, SYSTEM_PROMPT_WITH_CONTEXT, SYSTEM_PROMPT_NO_CONTEXT,
                          REWRITE_PROMPT,CLARIFY_PROMPT)
+from app.bm25_store import get_bm25_retriever
+
 
 logger = setup_logger()
 
@@ -168,19 +170,54 @@ def route_condition(state: RAGState) -> str:
     return "rewrite" if state.need_retrieve else "reset_context"
 
 
+
+def _rrf_fusion(docs_a: list, docs_b: list) -> list:
+    """RRF 倒数排名融合：两路排名累加分数，返回按分数降序的 doc 列表"""
+    scores: dict[str, float] = {}
+    doc_map: dict[str, object] = {}
+
+    for rank, doc in enumerate(docs_a, start=1):
+        key = doc.page_content
+        doc_map[key] = doc
+        scores[key] = scores.get(key, 0.0) + 1.0 / (RRF_K + rank)
+
+    for rank, doc in enumerate(docs_b, start=1):
+        key = doc.page_content
+        doc_map[key] = doc
+        scores[key] = scores.get(key, 0.0) + 1.0 / (RRF_K + rank)
+
+    ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    return [doc_map[key] for key, _ in ranked]
+
+
+
+
 def retrieve_node(state: RAGState) -> dict:
-    """检索节点：从向量库找与问题最相关的资料"""
+    """检索节点：向量检索 + BM25 关键词检索，RRF 融合后父块去重"""
     config = load_config()
     question = state.question
     vector_store = ensure_vector_store(
         index_dir=str(INDEX_DIR),
         embeddings=get_embeddings(),
     )
-    docs = vector_store.similarity_search(question, k=config["retriever"]["top_k"])
 
+    top_k = config["retriever"]["top_k"]
+    search_k = top_k * 3          # 每路多召回，给 RRF 融合留余量
+
+    # 向量检索
+    docs_vec = vector_store.similarity_search(question, k=search_k)
+
+    # BM25 关键词检索
+    bm25 = get_bm25_retriever(k=search_k)
+    docs_bm25 = bm25.invoke(question)
+
+    # RRF 融合
+    fused = _rrf_fusion(docs_vec, docs_bm25)
+
+    # 父块去重拼接（沿用你之前的逻辑）
     parents: dict[str, str] = {}
     total = 0
-    for doc in docs:
+    for doc in fused:
         pid = doc.metadata.get("parent_id", "")
         parent = doc.metadata.get("parent_text", "")
         if not parent or pid in parents:
@@ -192,8 +229,9 @@ def retrieve_node(state: RAGState) -> dict:
         parents[pid] = parent
         total += len(parent)
 
-    context = "\n\n".join(parents.values()) if parents else "\n\n".join(d.page_content for d in docs)
-    logger.info("检索 %d 块，去重后 %d 个父块，最终 %d 块 / %d 字符", len(docs), len(parents), len(parents), total)
+    context = "\n\n".join(parents.values()) if parents else "\n\n".join(d.page_content for d in fused[:top_k])
+    logger.info("向量 %d + BM25 %d，RRF 融合后 %d，去重 %d 父块",
+                len(docs_vec), len(docs_bm25), len(fused), len(parents))
     return {"context": context}
 
 
