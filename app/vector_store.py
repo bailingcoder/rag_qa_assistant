@@ -61,18 +61,11 @@ def _add_files(vector_store, files: list[Path]):
 def ensure_vector_store(index_dir=str(INDEX_DIR), embeddings=None):
     global _vector_store
     Path(index_dir).mkdir(parents=True, exist_ok=True)
-    if _vector_store is not None:
-        # 缓存命中，但仍检查有无新文件（有则追加）
-        new = _new_files()
-        if new:
-            logger.info("发现 %d 个新文件，增量追加", len(new))
-            _add_files(_vector_store, new)
-        return _vector_store
 
     if embeddings is None:
         embeddings = get_embeddings()
 
-    # 磁盘已有向量库 → 加载后检查增量
+    # 首次从磁盘加载向量库，并判断是否有新增数据文件，如有则追加到向量库和磁盘中
     if Path(index_dir).exists() and (Path(index_dir) / "index.faiss").exists():
         logger.info("从磁盘加载向量库: %s", index_dir)
         _vector_store = FAISS.load_local(index_dir, embeddings, allow_dangerous_deserialization=True)
@@ -82,7 +75,17 @@ def ensure_vector_store(index_dir=str(INDEX_DIR), embeddings=None):
             _add_files(_vector_store, new)
         return _vector_store
 
-    # 首次构建：处理全部文件
+    # 缓存命中，但仍检查有无新文件（有则追加）
+    if _vector_store is not None:
+        # 缓存命中，但仍检查有无新文件（有则追加）
+        new = _new_files()
+        if new:
+            logger.info("发现 %d 个新文件，增量追加", len(new))
+            _add_files(_vector_store, new)
+        return _vector_store
+
+
+    # 首次构建向量库：处理全部文件
     logger.warning("向量库不存在，开始全量构建（首次较慢）...")
     config = load_config()
     sc = config["splitter"]

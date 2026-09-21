@@ -152,6 +152,7 @@ def clarify_node(state: RAGState) -> dict:
     question = state.question
     history = state.history
     try:
+        history = _format_history(history)
         data = _llm_json(CLARIFY_PROMPT.format(question=question, history=history))
         clarify_question = str(data.get("clarify_question", ""))
     except (json.JSONDecodeError, KeyError, TypeError):
