@@ -35,6 +35,7 @@ def split_documents_with_parent(documents, chunk_size=500, chunk_overlap=50) -> 
     all_chunks = []
     for doc in documents:
         doc_id = _doc_id(doc)
+        page = doc.metadata.get("page", -1)
         sections = split_sections(doc.page_content)
         for i, section in enumerate(sections):
             sec_doc = type(doc)(page_content=section, metadata=dict(doc.metadata))
@@ -42,7 +43,7 @@ def split_documents_with_parent(documents, chunk_size=500, chunk_overlap=50) -> 
             for j, c in enumerate(chunks):
                 c.metadata["doc_id"] = doc_id                  # 所属文档（去重用）
                 c.metadata["parent_text"] = section            # 父块全文
-                c.metadata["parent_id"] = f"{doc_id}:{i}"       # 按父去重
+                c.metadata["parent_id"] = f"{doc_id}:{page}:{i}"       # 按父去重
             all_chunks.extend(chunks)
 
     logger.info("已切分 %d 个文档为 %d 个块", len(documents), len(all_chunks))
